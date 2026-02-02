@@ -195,7 +195,7 @@
         div.className = (d === 'Müsait' ? 'free' : 'busy');
     });
 
-    let ilkOdaklanmaYapildi = true; // Haritanın her saniye zıplayıp kullanıcıyı rahatsız etmemesi için
+    let ilkOdaklanmaYapildi = false ; // Haritanın her saniye zıplayıp kullanıcıyı rahatsız etmemesi için
 
     database.ref('konum').on('value', (s) => {
     const raw = s.val();
