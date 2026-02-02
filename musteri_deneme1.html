@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Moto-Taksi Canlı Takip</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; background: #111; color: #fff; }
+        header { padding: 15px; text-align: center; background: #000; border-bottom: 2px solid #333; }
+        #status { font-size: 20px; font-weight: bold; padding: 10px; border-radius: 8px; margin-top: 10px; display: inline-block; }
+        #map { height: 70vh; width: 100%; }
+        .panel { padding: 20px; text-align: center; }
+        .btn { display: block; margin: 10px auto; padding: 15px; width: 90%; max-width: 300px; font-size: 18px; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; font-weight: bold; }
+        .call { background: #1db954; color: black; }
+        .free { background: #00cc66; color: white; }
+        .busy { background: #ff4444; color: white; }
+    
+        /* ROTA BİLGİ PANELİ STİLLERİ */
+        .route-panel {
+        background: rgba(255, 255, 255, 0.1); /* Saydam beyaz doku */
+        backdrop-filter: blur(10px); /* Arka planı bulanıklaştırır, çok şık durur */
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 15px;
+        margin: 10px;
+        border-radius: 12px;
+        }
+        .location-box {
+            background: #1a1a1a; /* Body'den farklı, koyu gri panel */
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid #fff; /* Yan tarafına renkli çizgi */
+        }
+        .start-box { border-left-color: #00cc66; } /* Başlangıç yeşil */
+        .end-box { border-left-color: #ff4444; }   /* Varış kırmızı */
+        
+        .mini-delete-btn {
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .mini-delete-btn:hover { background: #666; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h2>Motorcu Nerede?</h2>
+    <div id="status">Yükleniyor...</div>
+</header>
+
+<div id="map"></div>
+
+
+<div class="route-panel">
+    <div class="location-box start-box">
+        <span id="start-point">📍 Başlangıç: Bekleniyor...</span>
+        <button class="mini-delete-btn" onclick="tekilSil('start')">Sil</button>
+    </div>
+    <div class="location-box end-box">
+        <span id="end-point">🏁 Varış: Bekleniyor...</span>
+        <button class="mini-delete-btn" onclick="tekilSil('end')">Sil</button>
+    </div>
+</div>
+<!-- <div class="panel" style="background: #222; margin-bottom: 10px;">
+    <div id="route-info">
+        <p id="start-point">📍 Başlangıç: Seçilmedi</p>
+        <p id="end-point">🏁 Varış: Seçilmedi</p>
+    </div>
+    <button class="btn" onclick="rotayiSifirla()" style="background: #555; font-size: 14px; width: auto; padding: 5px 15px;">Seçimleri Temizle</button>
+</div> -->
+
+<div class="panel">
+    <a href="tel:+905XXXXXXXXX" class="btn call">📞 Hemen Ara / Çağır</a>
+    <p><small>Konumum her 10 saniyede bir güncellenir.</small></p>
+</div>
+  <!-- // Firebase ve Leaflet JS dosyaları -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!--  haritaya konum ekleme dosyası yani arama yapabilecek -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyCrQOAPqhC_vnCly0twAJB0jrOS-Z9G3yA",
+        databaseURL: "https://moto-tax-b2e0a-default-rtdb.firebaseio.com",
+        projectId: "moto-tax-b2e0a",
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    // HARİTA KURULUMU
+    const map = L.map('map').setView([41.015, 28.979], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    const taxiIcon = L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/31/31135.png',
+        iconSize: [40, 40],
+        iconAnchor: [20, 40]
+    });
+
+    var geocoder = L.Control.geocoder({
+    defaultMarkGeocode: false
+    })
+        .on('markgeocode', function(e) {
+            var bbox = e.geocode.bbox;
+            var poly = L.polygon([
+            bbox.getSouthEast(),
+            bbox.getNorthEast(),
+            bbox.getNorthWest(),
+            bbox.getSouthWest()
+            ]);
+            map.fitBounds(poly.getBounds());
+            
+            // Aramadan gelen sonucu başlangıç veya varış noktası olarak ayarla
+            if (!startMarker) {
+                startMarker = L.marker(e.geocode.center).addTo(map).bindPopup("Başlangıç: " + e.geocode.name).openPopup();
+                document.getElementById('start-point').innerHTML = "📍 Başlangıç: " + e.geocode.name;
+            } else {
+                endMarker = L.marker(e.geocode.center).addTo(map).bindPopup("Varış: " + e.geocode.name).openPopup();
+                document.getElementById('end-point').innerHTML = "🏁 Varış: " + e.geocode.name;
+            }
+        })
+        .addTo(map);
+
+    const marker = L.marker([41.015, 28.979], {icon: taxiIcon}).addTo(map);
+
+    // 1. DURUMU TAKİP ET (Müşteri için en önemli kısım)
+    database.ref('durum').on('value', (snapshot) => {
+        const s = snapshot.val() || "Müsait";
+        const statusDiv = document.getElementById('status');
+        statusDiv.innerHTML = (s === 'Müsait' ? '🟢 ' : '🔴 ') + s;
+        statusDiv.className = (s === 'Müsait' ? 'free' : 'busy');
+    });
+
+    // 2. KONUMU TAKİP ET
+    database.ref('konum').on('value', (snapshot) => {
+        const rawData = snapshot.val();
+        if (rawData) {
+            const keys = Object.keys(rawData);
+            const latestKey = keys[keys.length - 1];
+            const data = rawData[latestKey];
+
+            if (data && data.location && data.location.coords) {
+                const lat = data.location.coords.latitude;
+                const lng = data.location.coords.longitude;
+                marker.setLatLng([lat, lng]);
+                map.panTo([lat, lng]);
+            }
+        }
+    });
+
+
+    let startMarker = null;
+    let endMarker = null;
+
+    map.on('click', function(e) {
+        if (!startMarker) {
+            // İlk tıklama: Başlangıç
+            startMarker = L.marker(e.latlng, {draggable: true}).addTo(map)
+                .bindPopup("Seni buradan alacağım").openPopup();
+            document.getElementById('start-point').innerHTML = `📍 Başlangıç: ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+        } else if (!endMarker) {
+            // İkinci tıklama: Varış
+            endMarker = L.marker(e.latlng, {draggable: true, icon: L.icon({iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png', iconSize: [30, 30]})}).addTo(map)
+                .bindPopup("Buraya gideceğiz").openPopup();
+            document.getElementById('end-point').innerHTML = `🏁 Varış: ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+            
+            // Firebase'e bu talebi gönderebiliriz
+            talebiGonder(startMarker.getLatLng(), endMarker.getLatLng());
+        }
+    });
+
+   // rota noktalarını silme fonktsiyorun//
+    function tekilSil(tip) {
+        if (tip === 'start') {
+            if (startMarker) {
+                map.removeLayer(startMarker);
+                startMarker = null;
+            }
+            document.getElementById('start-point').innerHTML = "📍 Başlangıç: Bekleniyor...";
+        } else if (tip === 'end') {
+            if (endMarker) {
+                map.removeLayer(endMarker);
+                endMarker = null;
+            }
+            document.getElementById('end-point').innerHTML = "🏁 Varış: Bekleniyor...";
+        }
+    }
+
+    // --- GÜNCELLENMİŞ GEOCODER (Arama Kutusu Mantığı) ---
+    var geocoder = L.Control.geocoder({
+    defaultMarkGeocode: false
+    })
+    .on('markgeocode', function(e) {
+        // Eğer başlangıç boşsa oraya, değilse varışa ata
+        if (!startMarker) {
+            startMarker = L.marker(e.geocode.center).addTo(map).bindPopup("Başlangıç").openPopup();
+            document.getElementById('start-point').innerHTML = "📍 Başlangıç: " + e.geocode.name;
+        } else if (!endMarker) {
+            endMarker = L.marker(e.geocode.center).addTo(map).bindPopup("Varış").openPopup();
+            document.getElementById('end-point').innerHTML = "🏁 Varış: " + e.geocode.name;
+        }
+        map.panTo(e.geocode.center);
+    })
+    .addTo(map);
+    // function rotayiSifirla() {
+    //     if (startMarker) map.removeLayer(startMarker);
+    //     if (endMarker) map.removeLayer(endMarker);
+    //     startMarker = null;
+    //     endMarker = null;
+    //     document.getElementById('start-point').innerHTML = "📍 Başlangıç: Seçilmedi";
+    //     document.getElementById('end-point').innerHTML = "🏁 Varış: Seçilmedi";
+    // }
+</script>
+</body>
+</html>
